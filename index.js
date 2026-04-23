@@ -1,64 +1,83 @@
 import express from "express";
 import crypto from "crypto";
-import fetch from "node-fetch";
+import { URLSearchParams } from "node:url";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const app = express();
 
-// ─── Config ───────────────────────────────────────────────────────────────────
 const {
-  SHOPIFY_SHOP,           // e.g. your-store.myshopify.com
-  SHOPIFY_ACCESS_TOKEN,   // Admin API token (read_orders + write_fulfillments)
-  SHOPIFY_WEBHOOK_SECRET, // Webhook signing secret
+  SHOPIFY_SHOP,
+  SHOPIFY_CLIENT_ID,
+  SHOPIFY_CLIENT_SECRET,
+  SHOPIFY_WEBHOOK_SECRET,
   PORT = 3000,
 } = process.env;
 
-// UniUni tracking URL pattern
-const UNIUNI_TRACKING_URL = (trackingNumber) =>
-  `https://www.uniuni.com/track?trackingNumber=${trackingNumber}`;
+const UNIUNI_TRACKING_URL = (n) =>
+  `https://www.uniuni.com/track?trackingNumber=${n}`;
 
-// UniUni tracking number patterns (adjust if needed)
 const UNIUNI_PATTERNS = [
-  /^UU\d{10,}/i,         // UU + digits
-  /^1UU\d{8,}/i,         // 1UU prefix
-  /^UUDA\d{8,}/i,        // UUDA prefix
-  /^[A-Z]{2}\d{9}[A-Z]{2}$/i, // Standard postal format sometimes used
+  /^UU\d{8,}/i,
+  /^1UU\d{8,}/i,
+  /^UUDA\d{8,}/i,
+  /^UNI\d{8,}/i,
 ];
 
-// ─── Middleware ────────────────────────────────────────────────────────────────
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf; // needed for HMAC verification
-  },
-}));
+let cachedToken = null;
+let tokenExpiresAt = 0;
 
-// ─── Webhook HMAC Verification ────────────────────────────────────────────────
+async function getAccessToken() {
+  if (cachedToken && Date.now() < tokenExpiresAt - 60_000) return cachedToken;
+  console.log("[Auth] Fetching new Shopify access token...");
+  const response = await fetch(
+    `https://${SHOPIFY_SHOP}.myshopify.com/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: SHOPIFY_CLIENT_ID,
+        client_secret: SHOPIFY_CLIENT_SECRET,
+      }),
+    }
+  );
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Token request failed (${response.status}): ${error}`);
+  }
+  const { access_token, expires_in } = await response.json();
+  cachedToken = access_token;
+  tokenExpiresAt = Date.now() + expires_in * 1000;
+  console.log(`[Auth] ✅ Token acquired`);
+  return cachedToken;
+}
+
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
+
 function verifyWebhook(req) {
   const hmac = req.headers["x-shopify-hmac-sha256"];
   if (!hmac || !SHOPIFY_WEBHOOK_SECRET) return false;
-  const hash = crypto
-    .createHmac("sha256", SHOPIFY_WEBHOOK_SECRET)
-    .update(req.rawBody)
-    .digest("base64");
+  const hash = crypto.createHmac("sha256", SHOPIFY_WEBHOOK_SECRET).update(req.rawBody).digest("base64");
   return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(hmac));
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function isUniUniTracking(trackingNumber) {
+function isUniUni(trackingNumber, trackingCompany) {
   if (!trackingNumber) return false;
-  return UNIUNI_PATTERNS.some((pattern) => pattern.test(trackingNumber));
+  if (trackingCompany) {
+    const c = trackingCompany.toLowerCase();
+    if (c.includes("uniuni") || c.includes("uni-uni")) return true;
+  }
+  return UNIUNI_PATTERNS.some((p) => p.test(trackingNumber));
 }
 
 async function shopifyRequest(method, path, body = null) {
-  const url = `https://${SHOPIFY_SHOP}/admin/api/2024-01${path}`;
+  const token = await getAccessToken();
+  const url = `https://${SHOPIFY_SHOP}.myshopify.com/admin/api/2025-01${path}`;
   const options = {
     method,
-    headers: {
-      "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-      "Content-Type": "application/json",
-    },
+    headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
   };
   if (body) options.body = JSON.stringify(body);
   const res = await fetch(url, options);
@@ -67,172 +86,66 @@ async function shopifyRequest(method, path, body = null) {
   return data;
 }
 
-async function patchFulfillmentTracking(fulfillmentId, orderId, trackingNumber) {
-  console.log(`[UniUni] Patching fulfillment ${fulfillmentId} with tracking ${trackingNumber}`);
-  
-  // Shopify Admin API v2024-01 uses fulfillment update endpoint
-  const payload = {
+async function patchTracking(fulfillmentId, trackingNumber) {
+  console.log(`[UniUni] Patching ${fulfillmentId} → ${trackingNumber}`);
+  await shopifyRequest("POST", `/fulfillments/${fulfillmentId}/update_tracking.json`, {
     fulfillment: {
       tracking_info: {
         number: trackingNumber,
         url: UNIUNI_TRACKING_URL(trackingNumber),
         company: "UniUni",
       },
-      notify_customer: false, // Don't re-notify, they already got the email
+      notify_customer: false,
     },
-  };
-
-  try {
-    const result = await shopifyRequest(
-      "POST",
-      `/fulfillments/${fulfillmentId}/update_tracking.json`,
-      payload
-    );
-    console.log(`[UniUni] ✅ Successfully updated tracking URL for fulfillment ${fulfillmentId}`);
-    return result;
-  } catch (err) {
-    console.error(`[UniUni] ❌ Failed to update tracking:`, err.message);
-    throw err;
-  }
+  });
+  console.log(`[UniUni] ✅ Done`);
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-
-// Health check
 app.get("/", (req, res) => {
-  res.json({ status: "ok", service: "uniuni-shopify-tracker" });
+  res.json({ status: "ok", service: "shipflow-uniuni-tracker", shop: SHOPIFY_SHOP });
 });
 
-// ── Fulfillment Created Webhook ────────────────────────────────────────────────
-// Register this at: https://your-store.myshopify.com/admin/settings/notifications
-// Topic: fulfillments/create
-// URL: https://your-app.railway.app/webhooks/fulfillment-created
 app.post("/webhooks/fulfillment-created", async (req, res) => {
-  // Always respond 200 first to avoid Shopify retries
   res.status(200).send("ok");
-
-  if (!verifyWebhook(req)) {
-    console.warn("[Webhook] HMAC verification failed — ignoring");
-    return;
-  }
-
-  const fulfillment = req.body;
-  const { id: fulfillmentId, order_id, tracking_number, tracking_company } = fulfillment;
-
-  console.log(`[Webhook] Fulfillment created: ${fulfillmentId} | Tracking: ${tracking_number} | Company: ${tracking_company}`);
-
-  // Only process if tracking number looks like UniUni
-  if (!isUniUniTracking(tracking_number)) {
-    console.log(`[Webhook] Tracking number ${tracking_number} does not match UniUni — skipping`);
-    return;
-  }
-
-  // Only patch if the tracking URL isn't already set correctly
-  const existingUrl = fulfillment.tracking_url || "";
-  if (existingUrl.includes("uniuni.com")) {
-    console.log(`[Webhook] UniUni URL already set — skipping`);
-    return;
-  }
-
-  try {
-    await patchFulfillmentTracking(fulfillmentId, order_id, tracking_number);
-  } catch (err) {
-    console.error("[Webhook] Error patching fulfillment:", err.message);
-  }
+  if (!verifyWebhook(req)) return;
+  const { id, tracking_number, tracking_company, tracking_url } = req.body;
+  console.log(`[Webhook] Created: ${id} | ${tracking_number} | ${tracking_company}`);
+  if (!isUniUni(tracking_number, tracking_company)) return;
+  if (tracking_url && tracking_url.includes("uniuni.com")) return;
+  try { await patchTracking(id, tracking_number); } catch (e) { console.error(e.message); }
 });
 
-// ── Fulfillment Updated Webhook ────────────────────────────────────────────────
-// Topic: fulfillments/update
-// Catches cases where tracking is added after fulfillment creation
 app.post("/webhooks/fulfillment-updated", async (req, res) => {
   res.status(200).send("ok");
-
-  if (!verifyWebhook(req)) {
-    console.warn("[Webhook] HMAC verification failed — ignoring");
-    return;
-  }
-
-  const fulfillment = req.body;
-  const { id: fulfillmentId, order_id, tracking_number, tracking_url } = fulfillment;
-
-  if (!isUniUniTracking(tracking_number)) return;
-  if (tracking_url && tracking_url.includes("uniuni.com")) return; // already fixed
-
-  console.log(`[Webhook] Fulfillment updated with UniUni tracking: ${tracking_number}`);
-
-  try {
-    await patchFulfillmentTracking(fulfillmentId, order_id, tracking_number);
-  } catch (err) {
-    console.error("[Webhook] Error patching fulfillment:", err.message);
-  }
+  if (!verifyWebhook(req)) return;
+  const { id, tracking_number, tracking_company, tracking_url } = req.body;
+  if (!isUniUni(tracking_number, tracking_company)) return;
+  if (tracking_url && tracking_url.includes("uniuni.com")) return;
+  try { await patchTracking(id, tracking_number); } catch (e) { console.error(e.message); }
 });
 
-// ── Manual Backfill Endpoint ───────────────────────────────────────────────────
-// POST /backfill with { "days": 7 } to fix historical fulfillments
 app.post("/backfill", async (req, res) => {
   const { days = 7, dry_run = false } = req.body || {};
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-
-  console.log(`[Backfill] Starting backfill for last ${days} days (dry_run: ${dry_run})`);
-
   try {
-    // Fetch recent orders with fulfillments
-    const { orders } = await shopifyRequest(
-      "GET",
-      `/orders.json?status=any&updated_at_min=${since}&limit=250`
-    );
-
+    const { orders } = await shopifyRequest("GET", `/orders.json?status=any&updated_at_min=${since}&limit=250`);
     const results = { checked: 0, patched: 0, skipped: 0, errors: 0 };
-
     for (const order of orders) {
-      const { fulfillments = [] } = await shopifyRequest(
-        "GET",
-        `/orders/${order.id}/fulfillments.json`
-      ).then((d) => d);
-
+      const { fulfillments = [] } = await shopifyRequest("GET", `/orders/${order.id}/fulfillments.json`);
       for (const f of fulfillments) {
         results.checked++;
-        const { id, tracking_number, tracking_url } = f;
-
-        if (!isUniUniTracking(tracking_number)) {
-          results.skipped++;
-          continue;
-        }
-
-        if (tracking_url && tracking_url.includes("uniuni.com")) {
-          console.log(`[Backfill] ${tracking_number} already correct — skipping`);
-          results.skipped++;
-          continue;
-        }
-
-        console.log(`[Backfill] ${dry_run ? "[DRY RUN] Would patch" : "Patching"}: ${tracking_number}`);
-
+        if (!isUniUni(f.tracking_number, f.tracking_company)) { results.skipped++; continue; }
+        if (f.tracking_url && f.tracking_url.includes("uniuni.com")) { results.skipped++; continue; }
         if (!dry_run) {
-          try {
-            await patchFulfillmentTracking(id, order.id, tracking_number);
-            results.patched++;
-          } catch {
-            results.errors++;
-          }
-        } else {
-          results.patched++;
-        }
+          try { await patchTracking(f.id, f.tracking_number); results.patched++; }
+          catch { results.errors++; }
+        } else { results.patched++; }
       }
     }
-
-    res.json({ success: true, ...results });
-  } catch (err) {
-    console.error("[Backfill] Error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
+    res.json({ success: true, dry_run, ...results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n🚀 UniUni Shopify Tracker running on port ${PORT}`);
-  console.log(`   Shop: ${SHOPIFY_SHOP}`);
-  console.log(`   Webhook endpoints:`);
-  console.log(`     POST /webhooks/fulfillment-created`);
-  console.log(`     POST /webhooks/fulfillment-updated`);
-  console.log(`     POST /backfill  (manual fix)\n`);
+  console.log(`🚀 ShipFlow UniUni Tracker on port ${PORT} | ${SHOPIFY_SHOP}.myshopify.com`);
 });
