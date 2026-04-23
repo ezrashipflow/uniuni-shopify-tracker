@@ -103,7 +103,7 @@ async function patchTracking(fulfillmentId, trackingNumber) {
           tracking_info: {
             number: trackingNumber,
             url: UNIUNI_TRACKING_URL(trackingNumber),
-            company: "Other",
+            company: "UniUni",
           },
           notify_customer: false,
         },
