@@ -19,7 +19,7 @@ const UNIUNI_TRACKING_URL = (n) =>
   `https://www.uniuni.com/tracking/#tracking-detail?no=${n}`;
 
 const UNIUNI_PATTERNS = [
-  /^UU\d{8,}/i,
+  /^UU[A-Z0-9]{8,}/i,
   /^1UU\d{8,}/i,
   /^UUDA\d{8,}/i,
   /^UNI\d{8,}/i,
