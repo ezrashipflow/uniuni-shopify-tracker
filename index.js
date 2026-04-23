@@ -16,7 +16,7 @@ const {
 } = process.env;
 
 const UNIUNI_TRACKING_URL = (n) =>
-  `https://www.uniuni.com/track?trackingNumber=${n}`;
+  `https://www.uniuni.com/tracking/#tracking-detail?no=${n}`;
 
 const UNIUNI_PATTERNS = [
   /^UU\d{8,}/i,
