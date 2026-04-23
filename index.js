@@ -89,48 +89,33 @@ async function shopifyRequest(method, path, body = null) {
 async function patchTracking(fulfillmentId, trackingNumber) {
   console.log(`[UniUni] Patching ${fulfillmentId} → ${trackingNumber}`);
   const token = await getAccessToken();
-  const mutation = `
-    mutation fulfillmentTrackingInfoUpdate($fulfillmentId: ID!, $trackingInfoInput: FulfillmentTrackingInput!, $notifyCustomer: Boolean) {
-      fulfillmentTrackingInfoUpdate(fulfillmentId: $fulfillmentId, trackingInfoInput: $trackingInfoInput, notifyCustomer: $notifyCustomer) {
-        fulfillment {
-          id
-          trackingInfo {
-            number
-            url
-            company
-          }
-        }
-        userErrors {
-          field
-          message
-        }
-      }
-    }
-  `;
-  const variables = {
-    fulfillmentId: `gid://shopify/Fulfillment/${fulfillmentId}`,
-    trackingInfoInput: {
-      number: trackingNumber,
-      url: UNIUNI_TRACKING_URL(trackingNumber),
-      company: "Other",
-    },
-    notifyCustomer: false,
-  };
+  
   const response = await fetch(
-    `https://${SHOPIFY_SHOP}.myshopify.com/admin/api/2026-04/graphql.json`,
+    `https://${SHOPIFY_SHOP}.myshopify.com/admin/api/2026-04/fulfillments/${fulfillmentId}/update_tracking.json`,
     {
       method: "POST",
       headers: {
         "X-Shopify-Access-Token": token,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query: mutation, variables }),
+      body: JSON.stringify({
+        fulfillment: {
+          tracking_info: {
+            number: trackingNumber,
+            url: UNIUNI_TRACKING_URL(trackingNumber),
+            company: "Other",
+          },
+          notify_customer: false,
+        },
+      }),
     }
   );
+
   const data = await response.json();
-  const errors = data?.data?.fulfillmentTrackingInfoUpdate?.userErrors;
-  if (errors && errors.length > 0) {
-    throw new Error(JSON.stringify(errors));
+  console.log(`[UniUni] Response:`, JSON.stringify(data));
+  
+  if (!response.ok) {
+    throw new Error(JSON.stringify(data));
   }
   console.log(`[UniUni] ✅ Done`);
 }
