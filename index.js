@@ -74,7 +74,7 @@ function isUniUni(trackingNumber, trackingCompany) {
 
 async function shopifyRequest(method, path, body = null) {
   const token = await getAccessToken();
-  const url = `https://${SHOPIFY_SHOP}.myshopify.com/admin/api/2025-01${path}`;
+  const url = `https://${SHOPIFY_SHOP}.myshopify.com/admin/api/2026-04${path}`;
   const options = {
     method,
     headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
@@ -137,6 +137,23 @@ async function patchTracking(fulfillmentId, trackingNumber) {
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "shipflow-uniuni-tracker", shop: SHOPIFY_SHOP });
+});
+
+app.get("/debug/:orderId", async (req, res) => {
+  try {
+    const { fulfillments } = await shopifyRequest(
+      "GET",
+      `/orders/${req.params.orderId}/fulfillments.json`
+    );
+    res.json(fulfillments.map(f => ({
+      id: f.id,
+      tracking_number: f.tracking_number,
+      tracking_company: f.tracking_company,
+      tracking_url: f.tracking_url,
+    })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post("/webhooks/fulfillment-created", async (req, res) => {
