@@ -88,16 +88,50 @@ async function shopifyRequest(method, path, body = null) {
 
 async function patchTracking(fulfillmentId, trackingNumber) {
   console.log(`[UniUni] Patching ${fulfillmentId} → ${trackingNumber}`);
-  await shopifyRequest("POST", `/fulfillments/${fulfillmentId}/update_tracking.json`, {
-    fulfillment: {
-      tracking_info: {
-        number: trackingNumber,
-        url: UNIUNI_TRACKING_URL(trackingNumber),
-        company: "UniUni",
-      },
-      notify_customer: false,
+  const token = await getAccessToken();
+  const mutation = `
+    mutation fulfillmentTrackingInfoUpdate($fulfillmentId: ID!, $trackingInfoInput: FulfillmentTrackingInput!, $notifyCustomer: Boolean) {
+      fulfillmentTrackingInfoUpdate(fulfillmentId: $fulfillmentId, trackingInfoInput: $trackingInfoInput, notifyCustomer: $notifyCustomer) {
+        fulfillment {
+          id
+          trackingInfo {
+            number
+            url
+            company
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+  const variables = {
+    fulfillmentId: `gid://shopify/Fulfillment/${fulfillmentId}`,
+    trackingInfoInput: {
+      number: trackingNumber,
+      url: UNIUNI_TRACKING_URL(trackingNumber),
+      company: "UniUni",
     },
-  });
+    notifyCustomer: false,
+  };
+  const response = await fetch(
+    `https://${SHOPIFY_SHOP}.myshopify.com/admin/api/2026-04/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: mutation, variables }),
+    }
+  );
+  const data = await response.json();
+  const errors = data?.data?.fulfillmentTrackingInfoUpdate?.userErrors;
+  if (errors && errors.length > 0) {
+    throw new Error(JSON.stringify(errors));
+  }
   console.log(`[UniUni] ✅ Done`);
 }
 
