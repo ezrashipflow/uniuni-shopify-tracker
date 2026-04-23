@@ -112,7 +112,7 @@ async function patchTracking(fulfillmentId, trackingNumber) {
     trackingInfoInput: {
       number: trackingNumber,
       url: UNIUNI_TRACKING_URL(trackingNumber),
-      company: "UniUni",
+      company: "Other",
     },
     notifyCustomer: false,
   };
