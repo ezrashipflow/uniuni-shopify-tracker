@@ -1,7 +1,6 @@
 {
-  "name": "uniuni-shopify-tracker",
-  "version": "1.0.0",
-  "description": "Auto-patches UniUni tracking URLs on Shopify fulfillments",
+  "name": "shipflow-uniuni-tracker",
+  "version": "2.0.0",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -10,8 +9,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "node-fetch": "^3.3.2"
+    "express": "^4.19.2"
   },
   "engines": {
     "node": ">=18.0.0"
