@@ -139,12 +139,15 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", service: "shipflow-uniuni-tracker", shop: SHOPIFY_SHOP });
 });
 
-app.get("/debug/:orderId", async (req, res) => {
+app.get("/debug/:orderName", async (req, res) => {
   try {
-    const { fulfillments } = await shopifyRequest(
+    const { orders } = await shopifyRequest(
       "GET",
-      `/orders/${req.params.orderId}/fulfillments.json`
+      `/orders.json?name=%23${req.params.orderName}&status=any`
     );
+    if (!orders || orders.length === 0) return res.json({ error: "Order not found" });
+    const order = orders[0];
+    const { fulfillments } = await shopifyRequest("GET", `/orders/${order.id}/fulfillments.json`);
     res.json(fulfillments.map(f => ({
       id: f.id,
       tracking_number: f.tracking_number,
