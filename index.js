@@ -221,6 +221,100 @@ app.get("/debug/:shop/:orderName", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// UniUni Tracking Status Push
+app.post("/webhooks/uniuni-tracking", async (req, res) => {
+  res.status(200).send("ok");
+  
+  const events = req.body?.pushData || req.body?.data?.pushData || [];
+  if (!events.length) {
+    console.log("[UniUni Push] No events in payload");
+    return;
+  }
+
+  for (const event of events) {
+    const trackingNumber = event.tno || event.tracking_number;
+    const code = event.code || "";
+    const description = event.description_en || event.pathInfo || "";
+    
+    console.log(`[UniUni Push] ${trackingNumber} → ${code}: ${description}`);
+
+    // Map UniUni status codes to Shopify shipment statuses
+    const statusMap = {
+      "ORDER_RECEIVED":     "label_printed",
+      "LABEL_CREATED":      "label_printed",
+      "PICKED_UP":          "in_transit",
+      "IN_TRANSIT":         "in_transit",
+      "OUT_FOR_DELIVERY":   "out_for_delivery",
+      "DELIVERED":          "delivered",
+      "DELIVERY_FAILED":    "failure",
+      "EXCEPTION":          "failure",
+      "RETURNED":           "failure",
+    };
+
+    const shopifyStatus = statusMap[code.toUpperCase()];
+    if (!shopifyStatus) {
+      console.log(`[UniUni Push] No Shopify mapping for code: ${code} — skipping`);
+      continue;
+    }
+
+    // Find which store has this tracking number
+    let matched = false;
+    for (const store of Object.values(stores)) {
+      try {
+        // Search for the order by tracking number
+        const { orders } = await shopifyRequest(
+          store, "GET",
+          `/orders.json?status=any&limit=250&updated_at_min=${new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()}`
+        );
+
+        for (const order of orders) {
+          const { fulfillments = [] } = await shopifyRequest(store, "GET", `/orders/${order.id}/fulfillments.json`);
+          const fulfillment = fulfillments.find(f => f.tracking_number === trackingNumber);
+          
+          if (fulfillment) {
+            // Update shipment status via GraphQL
+            const token = await getAccessToken(store);
+            const mutation = `
+              mutation fulfillmentTrackingInfoUpdate($fulfillmentId: ID!, $trackingInfoInput: FulfillmentTrackingInput!) {
+                fulfillmentTrackingInfoUpdate(fulfillmentId: $fulfillmentId, trackingInfoInput: $trackingInfoInput, notifyCustomer: false) {
+                  fulfillment { id shipmentStatus }
+                  userErrors { field message }
+                }
+              }
+            `;
+            const variables = {
+              fulfillmentId: `gid://shopify/Fulfillment/${fulfillment.id}`,
+              trackingInfoInput: {
+                number: trackingNumber,
+                url: UNIUNI_TRACKING_URL(trackingNumber),
+                company: "UniUni",
+              },
+            };
+            const gqlRes = await fetch(
+              `https://${store.shop}.myshopify.com/admin/api/2026-04/graphql.json`,
+              {
+                method: "POST",
+                headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+                body: JSON.stringify({ query: mutation, variables }),
+              }
+            );
+            const gqlData = await gqlRes.json();
+            console.log(`[UniUni Push] ✅ Updated ${trackingNumber} → ${shopifyStatus} on ${store.shop}`);
+            matched = true;
+            break;
+          }
+        }
+        if (matched) break;
+      } catch (e) {
+        console.error(`[UniUni Push] Error on ${store.shop}:`, e.message);
+      }
+    }
+
+    if (!matched) {
+      console.log(`[UniUni Push] No fulfillment found for tracking number: ${trackingNumber}`);
+    }
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`\n🚀 ShipFlow UniUni Tracker (multi-store) on port ${PORT}`);
