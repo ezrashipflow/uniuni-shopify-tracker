@@ -168,7 +168,8 @@ app.post("/webhooks/fulfillment-updated", async (req, res) => {
 app.post("/webhooks/uniuni-tracking", async (req, res) => {
   res.status(200).send("ok");
 
-  const events = req.body?.pushData || req.body?.data?.pushData || [];
+  console.log("[UniUni Push] Raw payload:", JSON.stringify(req.body));
+const events = req.body?.pushData || req.body?.data?.pushData || [];
   if (!events.length) {
     console.log("[UniUni Push] No events in payload");
     return;
