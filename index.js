@@ -34,6 +34,8 @@ const UNIUNI_TRACKING_URL = (n) =>
 
 const UNIUNI_PATTERNS = [/^UU[A-Z0-9]{8,}/i, /^1UU\d{8,}/i, /^UUDA\d{8,}/i, /^UNI\d{8,}/i];
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 function isUniUni(trackingNumber, trackingCompany) {
   if (!trackingNumber) return false;
   if (trackingCompany) {
@@ -200,8 +202,6 @@ app.post("/webhooks/fulfillment-updated", async (req, res) => {
 app.post("/webhooks/uniuni-tracking", async (req, res) => {
   res.status(200).send("ok");
 
-  console.log("[UniUni Push] Raw payload:", JSON.stringify(req.body).substring(0, 500));
-
   const events = Array.isArray(req.body)
     ? req.body
     : (req.body?.pushData || req.body?.data?.pushData || []);
@@ -212,17 +212,18 @@ app.post("/webhooks/uniuni-tracking", async (req, res) => {
   }
 
   const statusMap = {
-    "ORDER_RECEIVED":   "label_printed",
-    "LABEL_CREATED":    "label_printed",
-    "GATEWAY_TRANSIT":  "in_transit",
-    "PARCEL_SCANNED":   "in_transit",
-    "PICKED_UP":        "in_transit",
-    "IN_TRANSIT":       "out_for_delivery",
-    "OUT_FOR_DELIVERY": "out_for_delivery",
-    "DELIVERED":        "delivered",
-    "DELIVERY_FAILED":  "failure",
-    "EXCEPTION":        "failure",
-    "RETURNED":         "failure",
+    "ORDER_RECEIVED":            "label_printed",
+    "LABEL_CREATED":             "label_printed",
+    "GATEWAY_TRANSIT":           "in_transit",
+    "GATEWAY_TO_GATEWAY_TRANSIT":"in_transit",
+    "PARCEL_SCANNED":            "in_transit",
+    "PICKED_UP":                 "in_transit",
+    "IN_TRANSIT":                "out_for_delivery",
+    "OUT_FOR_DELIVERY":          "out_for_delivery",
+    "DELIVERED":                 "delivered",
+    "DELIVERY_FAILED":           "failure",
+    "EXCEPTION":                 "failure",
+    "RETURNED":                  "failure",
   };
 
   // Get the latest event only (highest traceSeq)
@@ -245,13 +246,16 @@ app.post("/webhooks/uniuni-tracking", async (req, res) => {
   for (const store of Object.values(stores)) {
     try {
       const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+      await sleep(500);
       const { orders } = await shopifyRequest(store, "GET", `/orders.json?status=any&limit=250&updated_at_min=${since}`);
 
       for (const order of orders) {
+        await sleep(500);
         const { fulfillments = [] } = await shopifyRequest(store, "GET", `/orders/${order.id}/fulfillments.json`);
         const fulfillment = fulfillments.find(f => f.tracking_number === trackingNumber);
 
         if (fulfillment) {
+          await sleep(500);
           await updateShipmentStatus(store, fulfillment.id, trackingNumber, shopifyStatus);
           matched = true;
           break;
