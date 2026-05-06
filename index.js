@@ -212,21 +212,20 @@ app.post("/webhooks/uniuni-tracking", async (req, res) => {
   }
 
   const statusMap = {
-    "ORDER_RECEIVED":            "label_printed",
-    "LABEL_CREATED":             "label_printed",
-    "GATEWAY_TRANSIT":           "in_transit",
-    "GATEWAY_TO_GATEWAY_TRANSIT":"in_transit",
-    "PARCEL_SCANNED":            "in_transit",
-    "PICKED_UP":                 "in_transit",
-    "IN_TRANSIT":                "out_for_delivery",
-    "OUT_FOR_DELIVERY":          "out_for_delivery",
-    "DELIVERED":                 "delivered",
-    "DELIVERY_FAILED":           "failure",
-    "EXCEPTION":                 "failure",
-    "RETURNED":                  "failure",
+    "ORDER_RECEIVED":             "label_printed",
+    "LABEL_CREATED":              "label_printed",
+    "GATEWAY_TRANSIT":            "in_transit",
+    "GATEWAY_TO_GATEWAY_TRANSIT": "in_transit",
+    "PARCEL_SCANNED":             "in_transit",
+    "PICKED_UP":                  "in_transit",
+    "IN_TRANSIT":                 "out_for_delivery",
+    "OUT_FOR_DELIVERY":           "out_for_delivery",
+    "DELIVERED":                  "delivered",
+    "DELIVERY_FAILED":            "failure",
+    "EXCEPTION":                  "failure",
+    "RETURNED":                   "failure",
   };
 
-  // Get the latest event only (highest traceSeq)
   const latestEvent = events.reduce((latest, e) =>
     (e.traceSeq || 0) > (latest.traceSeq || 0) ? e : latest, events[0]);
 
@@ -246,16 +245,17 @@ app.post("/webhooks/uniuni-tracking", async (req, res) => {
   for (const store of Object.values(stores)) {
     try {
       const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
-      await sleep(500);
+      await sleep(600);
       const { orders } = await shopifyRequest(store, "GET", `/orders.json?status=any&limit=250&updated_at_min=${since}`);
+      await sleep(600);
 
       for (const order of orders) {
-        await sleep(500);
+        await sleep(600);
         const { fulfillments = [] } = await shopifyRequest(store, "GET", `/orders/${order.id}/fulfillments.json`);
         const fulfillment = fulfillments.find(f => f.tracking_number === trackingNumber);
 
         if (fulfillment) {
-          await sleep(500);
+          await sleep(600);
           await updateShipmentStatus(store, fulfillment.id, trackingNumber, shopifyStatus);
           matched = true;
           break;
@@ -287,15 +287,20 @@ app.post("/backfill", async (req, res) => {
     const results = { checked: 0, patched: 0, skipped: 0, errors: 0 };
     try {
       const { orders } = await shopifyRequest(store, "GET", `/orders.json?status=any&updated_at_min=${since}&limit=250`);
+      await sleep(600);
       for (const order of orders) {
+        await sleep(600);
         const { fulfillments = [] } = await shopifyRequest(store, "GET", `/orders/${order.id}/fulfillments.json`);
         for (const f of fulfillments) {
           results.checked++;
           if (!isUniUni(f.tracking_number, f.tracking_company)) { results.skipped++; continue; }
           if (f.tracking_url && f.tracking_url.includes("uniuni.com")) { results.skipped++; continue; }
           if (!dry_run) {
-            try { await patchTracking(store, f.id, f.tracking_number); results.patched++; }
-            catch { results.errors++; }
+            try {
+              await sleep(600);
+              await patchTracking(store, f.id, f.tracking_number);
+              results.patched++;
+            } catch { results.errors++; }
           } else {
             console.log(`[Backfill] DRY RUN [${store.shop}]: would patch ${f.tracking_number}`);
             results.patched++;
